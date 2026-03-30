@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Vòng quay may mắn</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop stop-color='%235de6ff'/%3E%3Cstop offset='1' stop-color='%23ff6dd9'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='%23050b16'/%3E%3Ccircle cx='32' cy='32' r='22' fill='none' stroke='url(%23g)' stroke-width='4'/%3E%3Cpath d='M32 10v44M10 32h44M18.5 18.5l27 27M45.5 18.5l-27 27' stroke='%23c9f6ff' stroke-opacity='.34' stroke-width='2'/%3E%3Ccircle cx='32' cy='32' r='5.5' fill='%23ffffff'/%3E%3Cpath d='M52 30l7 2-7 2z' fill='%235de6ff'/%3E%3C/svg%3E">
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- React & ReactDOM -->
@@ -409,6 +410,56 @@
             border: 1px solid rgba(93, 230, 255, 0.18);
             box-shadow: 0 14px 28px rgba(0,0,0,0.28), 0 0 24px rgba(93, 230, 255, 0.08);
         }
+        .layout-edit-target {
+            position: relative;
+        }
+        .layout-edit-target.active {
+            box-shadow: 0 0 0 1px rgba(93, 230, 255, 0.22), 0 0 28px rgba(93, 230, 255, 0.08);
+        }
+        .drag-handle {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            z-index: 45;
+            padding: 8px 12px;
+            border-radius: 12px !important;
+            font-size: 11px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase !important;
+            color: #dffbff;
+            background: linear-gradient(180deg, rgba(16, 31, 51, 0.96), rgba(9, 17, 31, 0.92));
+            border: 1px dashed rgba(93, 230, 255, 0.36);
+            box-shadow: 0 10px 22px rgba(0,0,0,0.24);
+            cursor: grab;
+            user-select: none;
+            touch-action: none;
+        }
+        .drag-handle:active {
+            cursor: grabbing;
+            transform: scale(0.98);
+        }
+        .layout-toolbar {
+            position: fixed;
+            left: 50%;
+            bottom: 14px;
+            transform: translateX(-50%);
+            z-index: 85;
+            width: min(92vw, 460px);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px;
+            border-radius: 16px;
+            background: linear-gradient(180deg, rgba(9, 18, 34, 0.96), rgba(5, 12, 22, 0.94));
+            border: 1px solid rgba(93, 230, 255, 0.16);
+            box-shadow: 0 18px 38px rgba(0,0,0,0.3), 0 0 24px rgba(93, 230, 255, 0.07);
+            backdrop-filter: blur(18px) saturate(145%);
+            -webkit-backdrop-filter: blur(18px) saturate(145%);
+        }
+        .layout-toolbar button {
+            flex: 1;
+            min-height: 42px;
+        }
         #matrix-canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 0; pointer-events: none; opacity: 0.4; mix-blend-mode: screen; }
 
         @media (max-width: 1024px) {
@@ -549,16 +600,34 @@
         });
 
         // --- Cập nhật Mặc định khởi tạo ---
+        const defaultLayoutPositions = {
+            wheel: { x: 0, y: 0 },
+            panel: { x: 0, y: 0 }
+        };
+        const cloneLayoutPositions = (positions = defaultLayoutPositions) => ({
+            wheel: { ...defaultLayoutPositions.wheel, ...(positions?.wheel || {}) },
+            panel: { ...defaultLayoutPositions.panel, ...(positions?.panel || {}) }
+        });
+        const mergeSettingsState = (currentSettings = {}, incomingSettings = {}) => ({
+            ...defaultSettings,
+            ...currentSettings,
+            ...incomingSettings,
+            layoutPositions: cloneLayoutPositions(
+                incomingSettings.layoutPositions ?? currentSettings.layoutPositions ?? defaultLayoutPositions
+            )
+        });
         const defaultSettings = {
             enableConfetti: true,
             isEditMode: true, 
             isAdvancedMode: true,
+            isLayoutEditMode: false,
             showHideBtn: true,
             showDeleteBtn: true,
             autoSave: false,
             bgColor: '#050505',
             bgImageData: '',
             wheelImageData: '',
+            layoutPositions: cloneLayoutPositions(),
             isCrazyMode: false,
             isHackerBg: false,
             showSpinBtn: true,   // NEW: Hiện nút quay
@@ -590,6 +659,8 @@
             const [isGlitching, setIsGlitching] = useState(false);
             const [expandedId, setExpandedId] = useState(null);
             const [wheelState, setWheelState] = useState({ rotation: 0, duration: 0, easing: 'linear' });
+            const [layoutHistory, setLayoutHistory] = useState([]);
+            const [layoutFuture, setLayoutFuture] = useState([]);
 
             // -- Menu & Modal State --
             const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -601,8 +672,16 @@
             const lastTapRef = useRef(0);
             const currentTargetRef = useRef(null);
             const isHydratingRef = useRef(true);
+            const dragLayoutRef = useRef(null);
 
             const isCloudMode = Boolean(auth && db);
+            const layoutPositions = useMemo(() => cloneLayoutPositions(settings.layoutPositions), [settings.layoutPositions]);
+            const isDefaultLayout = useMemo(() => (
+                ['wheel', 'panel'].every((key) => (
+                    layoutPositions[key].x === defaultLayoutPositions[key].x &&
+                    layoutPositions[key].y === defaultLayoutPositions[key].y
+                ))
+            ), [layoutPositions]);
 
             const getEntryWeight = (entry, advancedMode = settings.isAdvancedMode) => {
                 if (!advancedMode) return 1;
@@ -618,7 +697,7 @@
                     if (data.currentState.entries) setEntries(data.currentState.entries);
                     if (data.currentState.results) setResults(data.currentState.results);
                     if (data.currentState.wheelTitle) setWheelTitle(data.currentState.wheelTitle);
-                    if (data.currentState.settings) setSettings(prev => ({ ...prev, ...data.currentState.settings }));
+                    if (data.currentState.settings) setSettings(prev => mergeSettingsState(prev, data.currentState.settings));
                 }
                 if (data.saves) setSaves(data.saves);
             };
@@ -647,6 +726,61 @@
                     setExpandedId(null);
                 }
             }, [settings.isAdvancedMode]);
+
+            useEffect(() => {
+                if (settings.isLayoutEditMode) return;
+                if (dragLayoutRef.current) {
+                    dragLayoutRef.current = null;
+                    document.body.style.userSelect = '';
+                }
+            }, [settings.isLayoutEditMode]);
+
+            useEffect(() => {
+                const handleLayoutDragMove = (event) => {
+                    const dragState = dragLayoutRef.current;
+                    if (!dragState) return;
+
+                    event.preventDefault();
+                    const nextPositions = cloneLayoutPositions(dragState.initialPositions);
+                    nextPositions[dragState.key] = {
+                        x: Math.round(dragState.initialPositions[dragState.key].x + (event.clientX - dragState.startX)),
+                        y: Math.round(dragState.initialPositions[dragState.key].y + (event.clientY - dragState.startY))
+                    };
+
+                    dragState.latestPositions = nextPositions;
+                    setSettings(prev => ({ ...prev, layoutPositions: nextPositions }));
+                };
+
+                const handleLayoutDragEnd = () => {
+                    const dragState = dragLayoutRef.current;
+                    if (!dragState) return;
+
+                    const latestPositions = cloneLayoutPositions(dragState.latestPositions || dragState.initialPositions);
+                    const initialPositions = cloneLayoutPositions(dragState.initialPositions);
+                    const hasMoved = ['wheel', 'panel'].some((key) => (
+                        latestPositions[key].x !== initialPositions[key].x ||
+                        latestPositions[key].y !== initialPositions[key].y
+                    ));
+
+                    if (hasMoved) {
+                        setLayoutHistory(prev => [...prev.slice(-29), initialPositions]);
+                        setLayoutFuture([]);
+                    }
+
+                    dragLayoutRef.current = null;
+                    document.body.style.userSelect = '';
+                };
+
+                window.addEventListener('pointermove', handleLayoutDragMove, { passive: false });
+                window.addEventListener('pointerup', handleLayoutDragEnd);
+                window.addEventListener('pointercancel', handleLayoutDragEnd);
+
+                return () => {
+                    window.removeEventListener('pointermove', handleLayoutDragMove);
+                    window.removeEventListener('pointerup', handleLayoutDragEnd);
+                    window.removeEventListener('pointercancel', handleLayoutDragEnd);
+                };
+            }, []);
 
             // 1. Khởi tạo Auth
             useEffect(() => {
@@ -1077,8 +1211,9 @@
                     if (!target) return;
 
                     if (!settings.isCrazyMode) {
-                        setWheelState({ rotation: target.rotation, duration: 0.2, easing: 'ease-out' });
-                        setTimeout(() => triggerFinalWin(target.winner), 300);
+                        setWheelState({ rotation: target.rotation, duration: 0, easing: 'linear' });
+                        await sleep(60);
+                        triggerFinalWin(target.winner);
                     } else {
                         setWheelState({ rotation: wheelState.rotation, duration: 0, easing: 'linear' }); 
                         await sleep(300);
@@ -1089,6 +1224,47 @@
                 } else {
                     lastTapRef.current = now;
                 }
+            };
+
+            const startLayoutDrag = (key, event) => {
+                if (!settings.isLayoutEditMode) return;
+                if (typeof event.button === 'number' && event.button !== 0) return;
+
+                event.preventDefault();
+                event.stopPropagation();
+                dragLayoutRef.current = {
+                    key,
+                    startX: event.clientX,
+                    startY: event.clientY,
+                    initialPositions: cloneLayoutPositions(layoutPositions),
+                    latestPositions: cloneLayoutPositions(layoutPositions)
+                };
+                document.body.style.userSelect = 'none';
+            };
+
+            const undoLayoutChange = () => {
+                if (layoutHistory.length === 0) return;
+                const previousPositions = cloneLayoutPositions(layoutHistory[layoutHistory.length - 1]);
+                setLayoutHistory(prev => prev.slice(0, -1));
+                setLayoutFuture(prev => [...prev.slice(-29), cloneLayoutPositions(layoutPositions)]);
+                setSettings(prev => ({ ...prev, layoutPositions: previousPositions }));
+            };
+
+            const redoLayoutChange = () => {
+                if (layoutFuture.length === 0) return;
+                const nextPositions = cloneLayoutPositions(layoutFuture[layoutFuture.length - 1]);
+                setLayoutFuture(prev => prev.slice(0, -1));
+                setLayoutHistory(prev => [...prev.slice(-29), cloneLayoutPositions(layoutPositions)]);
+                setSettings(prev => ({ ...prev, layoutPositions: nextPositions }));
+            };
+
+            const resetLayoutChanges = () => {
+                if (isDefaultLayout) return;
+                if (!window.confirm('Bạn có chắc muốn đưa bố cục về mặc định không?')) return;
+
+                setLayoutHistory(prev => [...prev.slice(-29), cloneLayoutPositions(layoutPositions)]);
+                setLayoutFuture([]);
+                setSettings(prev => ({ ...prev, layoutPositions: cloneLayoutPositions() }));
             };
 
             // --- List Management ---
@@ -1167,8 +1343,10 @@
             const loadSave = (saveData) => {
                 setEntries(saveData.data.entries || []);
                 setResults(saveData.data.results || []);
+                setLayoutHistory([]);
+                setLayoutFuture([]);
                 // Đảm bảo không ghi đè mất các setting mới
-                setSettings(prev => ({...defaultSettings, ...prev, ...(saveData.data.settings || {})}));
+                setSettings(prev => mergeSettingsState(prev, saveData.data.settings || {}));
                 setWheelTitle(saveData.data.wheelTitle || "Vòng quay may mắn");
                 setActiveModal(null);
                 setIsMenuOpen(false);
@@ -1196,7 +1374,7 @@
             }
 
             return (
-                <div className={`min-h-screen mx-auto w-full max-w-[1680px] px-4 pb-10 pt-24 lg:px-6 lg:pb-12 lg:pt-8 flex flex-col gap-4 xl:gap-5 relative overflow-x-hidden ${settings.isEditMode ? 'lg:flex-row lg:items-start' : 'items-center justify-center'}`}>
+                <div className={`min-h-screen mx-auto w-full max-w-[1680px] px-4 pb-10 pt-24 lg:px-6 lg:pb-12 lg:pt-8 flex flex-col gap-4 xl:gap-5 relative overflow-x-hidden ${settings.isLayoutEditMode ? 'pb-28 lg:pb-32' : ''} ${settings.isEditMode ? 'lg:flex-row lg:items-start' : 'items-center justify-center'}`}>
                     
                     {/* Thêm style để load custom Google Font động */}
                     {settings.customFont && settings.customFont.trim() !== '' && (
@@ -1254,6 +1432,13 @@
                                     </span>
                                     <input type="checkbox" checked={settings.isCrazyMode} onChange={(e) => updateSetting('isCrazyMode', e.target.checked)} className="ios-switch" style={{ '--switch-on': 'var(--neon-pink)' }} />
                                 </label>
+                                <label className="glass-card toggle-card mt-3 flex items-center justify-between cursor-pointer rounded-[24px] p-3.5 transition group">
+                                    <span className="text-cyan-100 font-semibold text-sm">Chế độ chỉnh sửa</span>
+                                    <input type="checkbox" checked={settings.isLayoutEditMode} onChange={(e) => updateSetting('isLayoutEditMode', e.target.checked)} className="ios-switch" />
+                                </label>
+                                <p className="mt-2 px-1 text-xs leading-5 text-slate-400">
+                                    Bật để kéo vòng quay và bảng kết quả theo ngang, dọc hoặc chéo. Thanh công cụ dưới cùng sẽ cho phép lùi, tiến và đưa bố cục về mặc định.
+                                </p>
                             </div>
 
                             <div className="p-3 space-y-2">
@@ -1278,7 +1463,19 @@
                     {isSpinning && <div className="tap-overlay" onClick={handleScreenTap} onTouchEnd={handleScreenTap}></div>}
 
                     {/* KHU VỰC VÒNG QUAY */}
-                    <div className={`w-full flex flex-col items-center relative mt-2 z-30 transition-all duration-500 ${settings.isEditMode ? 'lg:w-[64%] xl:w-[66%] lg:sticky lg:top-6 self-start justify-start' : 'max-w-5xl'}`}>
+                    <div
+                        className={`layout-edit-target w-full flex flex-col items-center relative mt-2 z-30 transition-all duration-500 ${settings.isLayoutEditMode ? 'active' : ''} ${settings.isEditMode ? 'lg:w-[64%] xl:w-[66%] lg:sticky lg:top-6 self-start justify-start' : 'max-w-5xl'}`}
+                        style={{ transform: `translate(${layoutPositions.wheel.x}px, ${layoutPositions.wheel.y}px)` }}
+                    >
+                        {settings.isLayoutEditMode && (
+                            <button
+                                type="button"
+                                className="drag-handle"
+                                onPointerDown={(event) => startLayoutDrag('wheel', event)}
+                            >
+                                Kéo vòng quay
+                            </button>
+                        )}
                         
                         {/* Title Editor */}
                         <div className="mb-5 flex items-center justify-center gap-2 max-w-full px-2 w-full">
@@ -1305,7 +1502,7 @@
                         {/* Vòng quay canvas */}
                         <div 
                             className={`wheel-container ${!settings.showSpinBtn && !isSpinning && entries.length > 0 ? 'clickable' : ''}`}
-                            onClick={!settings.showSpinBtn ? spin : undefined}
+                            onClick={!settings.isLayoutEditMode && !settings.showSpinBtn ? spin : undefined}
                         >
                             <canvas 
                                 ref={canvasRef} width={800} height={800} className="wheel-canvas"
@@ -1351,7 +1548,19 @@
 
                     {/* BẢNG ĐIỀU KHIỂN */}
                     {settings.isEditMode && (
-                        <div className="w-full lg:w-[36%] xl:w-[34%] self-start cyber-panel flex flex-col z-30 relative animate-fade-in overflow-visible">
+                        <div
+                            className={`layout-edit-target w-full lg:w-[36%] xl:w-[34%] self-start cyber-panel flex flex-col z-30 relative animate-fade-in overflow-visible ${settings.isLayoutEditMode ? 'active' : ''}`}
+                            style={{ transform: `translate(${layoutPositions.panel.x}px, ${layoutPositions.panel.y}px)` }}
+                        >
+                            {settings.isLayoutEditMode && (
+                                <button
+                                    type="button"
+                                    className="drag-handle"
+                                    onPointerDown={(event) => startLayoutDrag('panel', event)}
+                                >
+                                    Kéo bảng kết quả
+                                </button>
+                            )}
                             <div className="flex gap-2 border-b border-white/10 p-3">
                                 <button className={`tab-button flex-1 px-4 py-3 text-sm sm:text-base font-semibold transition ${activeTab === 'entries' ? 'glass-button active text-white' : 'text-slate-400 hover:text-white'}`} onClick={() => setActiveTab('entries')}>Danh sách kết quả</button>
                                 <button className={`tab-button flex-1 px-4 py-3 text-sm sm:text-base font-semibold transition ${activeTab === 'results' ? 'glass-button active text-white' : 'text-slate-400 hover:text-white'}`} onClick={() => setActiveTab('results')}>Lịch sử quay</button>
@@ -1440,6 +1649,20 @@
                                     </div>
                                 )}
                             </div>
+                        </div>
+                    )}
+
+                    {settings.isLayoutEditMode && (
+                        <div className="layout-toolbar">
+                            <button onClick={undoLayoutChange} disabled={layoutHistory.length === 0} className={`glass-button px-3 py-2.5 text-sm font-semibold ${layoutHistory.length === 0 ? 'cursor-not-allowed text-slate-500' : 'text-slate-100'}`}>
+                                Lùi
+                            </button>
+                            <button onClick={redoLayoutChange} disabled={layoutFuture.length === 0} className={`glass-button px-3 py-2.5 text-sm font-semibold ${layoutFuture.length === 0 ? 'cursor-not-allowed text-slate-500' : 'text-slate-100'}`}>
+                                Tiến
+                            </button>
+                            <button onClick={resetLayoutChanges} disabled={isDefaultLayout} className={`glass-button px-3 py-2.5 text-sm font-semibold ${isDefaultLayout ? 'cursor-not-allowed text-slate-500' : 'text-rose-100'}`}>
+                                Mặc định
+                            </button>
                         </div>
                     )}
 
