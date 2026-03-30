@@ -495,6 +495,24 @@
             cursor: nwse-resize;
             touch-action: none;
         }
+        .resize-handle.resize-handle-x {
+            top: 50%;
+            right: -10px;
+            bottom: auto;
+            width: 24px;
+            height: 76px;
+            transform: translateY(-50%);
+            cursor: ew-resize;
+        }
+        .resize-handle.resize-handle-y {
+            left: 50%;
+            right: auto;
+            bottom: -10px;
+            width: 76px;
+            height: 24px;
+            transform: translateX(-50%);
+            cursor: ns-resize;
+        }
         .resize-handle::before,
         .resize-handle::after {
             content: '';
@@ -517,8 +535,32 @@
             transform: rotate(-45deg);
             opacity: 0.7;
         }
+        .resize-handle.resize-handle-x::before,
+        .resize-handle.resize-handle-x::after {
+            top: 50%;
+            bottom: auto;
+            right: 6px;
+            transform: translateY(-50%) rotate(90deg);
+        }
+        .resize-handle.resize-handle-x::after {
+            right: 10px;
+            width: 8px;
+            opacity: 0.7;
+        }
+        .resize-handle.resize-handle-y::before,
+        .resize-handle.resize-handle-y::after {
+            left: 50%;
+            right: auto;
+            bottom: 6px;
+            transform: translateX(-50%);
+        }
+        .resize-handle.resize-handle-y::after {
+            bottom: 10px;
+            width: 8px;
+            opacity: 0.7;
+        }
         .resize-handle:active {
-            transform: scale(0.97);
+            filter: brightness(1.08);
         }
         .layout-toolbar {
             position: fixed;
@@ -689,17 +731,35 @@
 
         // --- Cập nhật Mặc định khởi tạo ---
         const defaultLayoutPositions = {
-            wheel: { x: 0, y: 0, scale: 1 },
-            panel: { x: 0, y: 0, scale: 1 }
+            wheel: { x: 0, y: 0, scaleX: 1, scaleY: 1 },
+            panel: { x: 0, y: 0, scaleX: 1, scaleY: 1 }
+        };
+        const normalizeLayoutFrame = (key, frame = {}) => {
+            const baseFrame = defaultLayoutPositions[key];
+            const legacyScale = Number.isFinite(frame?.scale) ? frame.scale : undefined;
+            const scaleX = Number.isFinite(frame?.scaleX) ? frame.scaleX : (legacyScale ?? baseFrame.scaleX);
+            const scaleY = Number.isFinite(frame?.scaleY) ? frame.scaleY : (legacyScale ?? baseFrame.scaleY);
+            return {
+                ...baseFrame,
+                ...frame,
+                scaleX,
+                scaleY: key === 'wheel' ? scaleX : scaleY
+            };
         };
         const cloneLayoutPositions = (positions = defaultLayoutPositions) => ({
-            wheel: { ...defaultLayoutPositions.wheel, ...(positions?.wheel || {}) },
-            panel: { ...defaultLayoutPositions.panel, ...(positions?.panel || {}) }
+            wheel: normalizeLayoutFrame('wheel', positions?.wheel),
+            panel: normalizeLayoutFrame('panel', positions?.panel)
         });
         const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
         const layoutScaleLimits = {
-            wheel: { min: 0.72, max: 1.32 },
-            panel: { min: 0.78, max: 1.22 }
+            wheel: {
+                x: { min: 0.72, max: 1.32 },
+                y: { min: 0.72, max: 1.32 }
+            },
+            panel: {
+                x: { min: 0.7, max: 1.28 },
+                y: { min: 0.72, max: 1.42 }
+            }
         };
         const mergeSettingsState = (currentSettings = {}, incomingSettings = {}) => ({
             ...defaultSettings,
@@ -766,6 +826,8 @@
             const currentTargetRef = useRef(null);
             const isHydratingRef = useRef(true);
             const dragLayoutRef = useRef(null);
+            const wheelLayoutRef = useRef(null);
+            const panelLayoutRef = useRef(null);
 
             const isCloudMode = Boolean(auth && db);
             const layoutPositions = useMemo(() => cloneLayoutPositions(settings.layoutPositions), [settings.layoutPositions]);
@@ -773,9 +835,27 @@
                 ['wheel', 'panel'].every((key) => (
                     layoutPositions[key].x === defaultLayoutPositions[key].x &&
                     layoutPositions[key].y === defaultLayoutPositions[key].y &&
-                    layoutPositions[key].scale === defaultLayoutPositions[key].scale
+                    layoutPositions[key].scaleX === defaultLayoutPositions[key].scaleX &&
+                    layoutPositions[key].scaleY === defaultLayoutPositions[key].scaleY
                 ))
             ), [layoutPositions]);
+            const getLayoutTransform = (key, positions = layoutPositions) => {
+                const frame = positions[key];
+                return `translate(${frame.x}px, ${frame.y}px) scale(${frame.scaleX}, ${key === 'wheel' ? frame.scaleX : frame.scaleY})`;
+            };
+            const applyLayoutPreview = (positions) => {
+                if (wheelLayoutRef.current) {
+                    wheelLayoutRef.current.style.transform = getLayoutTransform('wheel', positions);
+                }
+                if (panelLayoutRef.current) {
+                    panelLayoutRef.current.style.transform = getLayoutTransform('panel', positions);
+                }
+            };
+            const formatLayoutScaleLabel = (key) => {
+                const frame = layoutPositions[key];
+                if (key === 'wheel') return `${Math.round(frame.scaleX * 100)}%`;
+                return `${Math.round(frame.scaleX * 100)}x${Math.round(frame.scaleY * 100)}`;
+            };
 
             const getEntryWeight = (entry, advancedMode = settings.isAdvancedMode) => {
                 if (!advancedMode) return 1;
@@ -822,10 +902,18 @@
             }, [settings.isAdvancedMode]);
 
             useEffect(() => {
+                applyLayoutPreview(layoutPositions);
+            }, [layoutPositions]);
+
+            useEffect(() => {
                 if (settings.isLayoutEditMode) return;
                 if (dragLayoutRef.current) {
+                    if (dragLayoutRef.current.frameId) {
+                        cancelAnimationFrame(dragLayoutRef.current.frameId);
+                    }
                     dragLayoutRef.current = null;
                     document.body.style.userSelect = '';
+                    document.body.style.cursor = '';
                 }
             }, [settings.isLayoutEditMode]);
 
@@ -838,45 +926,71 @@
                     const nextPositions = cloneLayoutPositions(dragState.initialPositions);
                     const deltaX = event.clientX - dragState.startX;
                     const deltaY = event.clientY - dragState.startY;
+                    const initialFrame = dragState.initialPositions[dragState.key];
+                    const nextFrame = { ...nextPositions[dragState.key] };
 
-                    if (dragState.mode === 'resize') {
-                        const initialScale = dragState.initialPositions[dragState.key].scale;
-                        const rawScale = initialScale + ((deltaX + deltaY) / dragState.resizeDivisor);
-                        nextPositions[dragState.key] = {
-                            ...nextPositions[dragState.key],
-                            scale: Number(clamp(rawScale, layoutScaleLimits[dragState.key].min, layoutScaleLimits[dragState.key].max).toFixed(3))
-                        };
+                    if (dragState.mode === 'move') {
+                        nextFrame.x = Math.round(initialFrame.x + deltaX);
+                        nextFrame.y = Math.round(initialFrame.y + deltaY);
+                    } else if (dragState.key === 'wheel') {
+                        const wheelDelta = dragState.mode === 'resize-x'
+                            ? deltaX
+                            : dragState.mode === 'resize-y'
+                                ? deltaY
+                                : ((deltaX + deltaY) / 2);
+                        const nextScale = Number(clamp(initialFrame.scaleX + (wheelDelta / dragState.resizeDivisor), layoutScaleLimits.wheel.x.min, layoutScaleLimits.wheel.x.max).toFixed(3));
+                        nextFrame.scaleX = nextScale;
+                        nextFrame.scaleY = nextScale;
                     } else {
-                        nextPositions[dragState.key] = {
-                            ...nextPositions[dragState.key],
-                            x: Math.round(dragState.initialPositions[dragState.key].x + deltaX),
-                            y: Math.round(dragState.initialPositions[dragState.key].y + deltaY)
-                        };
+                        if (dragState.mode === 'resize-x' || dragState.mode === 'resize-diagonal') {
+                            nextFrame.scaleX = Number(clamp(initialFrame.scaleX + (deltaX / dragState.resizeDivisorX), layoutScaleLimits.panel.x.min, layoutScaleLimits.panel.x.max).toFixed(3));
+                        }
+                        if (dragState.mode === 'resize-y' || dragState.mode === 'resize-diagonal') {
+                            nextFrame.scaleY = Number(clamp(initialFrame.scaleY + (deltaY / dragState.resizeDivisorY), layoutScaleLimits.panel.y.min, layoutScaleLimits.panel.y.max).toFixed(3));
+                        }
                     }
 
+                    nextPositions[dragState.key] = nextFrame;
                     dragState.latestPositions = nextPositions;
-                    setSettings(prev => ({ ...prev, layoutPositions: nextPositions }));
+                    if (!dragState.frameId) {
+                        dragState.frameId = requestAnimationFrame(() => {
+                            applyLayoutPreview(dragState.latestPositions || dragState.initialPositions);
+                            if (dragLayoutRef.current) {
+                                dragLayoutRef.current.frameId = null;
+                            }
+                        });
+                    }
                 };
 
                 const handleLayoutDragEnd = () => {
                     const dragState = dragLayoutRef.current;
                     if (!dragState) return;
 
+                    if (dragState.frameId) {
+                        cancelAnimationFrame(dragState.frameId);
+                    }
+
                     const latestPositions = cloneLayoutPositions(dragState.latestPositions || dragState.initialPositions);
                     const initialPositions = cloneLayoutPositions(dragState.initialPositions);
                     const hasMoved = ['wheel', 'panel'].some((key) => (
                         latestPositions[key].x !== initialPositions[key].x ||
                         latestPositions[key].y !== initialPositions[key].y ||
-                        latestPositions[key].scale !== initialPositions[key].scale
+                        latestPositions[key].scaleX !== initialPositions[key].scaleX ||
+                        latestPositions[key].scaleY !== initialPositions[key].scaleY
                     ));
 
                     if (hasMoved) {
+                        applyLayoutPreview(latestPositions);
                         setLayoutHistory(prev => [...prev.slice(-29), initialPositions]);
                         setLayoutFuture([]);
+                        setSettings(prev => ({ ...prev, layoutPositions: latestPositions }));
+                    } else {
+                        applyLayoutPreview(initialPositions);
                     }
 
                     dragLayoutRef.current = null;
                     document.body.style.userSelect = '';
+                    document.body.style.cursor = '';
                 };
 
                 window.addEventListener('pointermove', handleLayoutDragMove, { passive: false });
@@ -1340,6 +1454,12 @@
 
                 event.preventDefault();
                 event.stopPropagation();
+                const cursorByMode = {
+                    move: 'grabbing',
+                    'resize-diagonal': 'nwse-resize',
+                    'resize-x': 'ew-resize',
+                    'resize-y': 'ns-resize'
+                };
                 dragLayoutRef.current = {
                     key,
                     mode,
@@ -1347,13 +1467,17 @@
                     startY: event.clientY,
                     initialPositions: cloneLayoutPositions(layoutPositions),
                     latestPositions: cloneLayoutPositions(layoutPositions),
-                    resizeDivisor: key === 'wheel' ? 360 : 420
+                    resizeDivisor: key === 'wheel' ? 320 : 320,
+                    resizeDivisorX: key === 'wheel' ? 320 : 340,
+                    resizeDivisorY: key === 'wheel' ? 320 : 360,
+                    frameId: null
                 };
                 document.body.style.userSelect = 'none';
+                document.body.style.cursor = cursorByMode[mode] || 'grabbing';
             };
 
             const startLayoutDrag = (key, event) => startLayoutInteraction(key, 'move', event);
-            const startLayoutResize = (key, event) => startLayoutInteraction(key, 'resize', event);
+            const startLayoutResize = (key, mode, event) => startLayoutInteraction(key, mode, event);
 
             const undoLayoutChange = () => {
                 if (layoutHistory.length === 0) return;
@@ -1550,7 +1674,7 @@
                                     <input type="checkbox" checked={settings.isLayoutEditMode} onChange={(e) => updateSetting('isLayoutEditMode', e.target.checked)} className="ios-switch" />
                                 </label>
                                 <p className="mt-2 px-1 text-xs leading-5 text-slate-400">
-                                    Bật để kéo cả hai khối như cửa sổ nhỏ. Thanh trên dùng để di chuyển, góc dưới phải dùng để phóng to hoặc thu nhỏ, và thanh dưới cùng cho phép lùi, tiến hoặc đưa bố cục về mặc định.
+                                    Bật để kéo cả hai khối như cửa sổ nhỏ. Thanh trên dùng để di chuyển, cạnh phải kéo ngang, cạnh dưới kéo dọc, góc dưới phải kéo chéo, và thanh dưới cùng cho phép lùi, tiến hoặc đưa bố cục về mặc định.
                                 </p>
                             </div>
 
@@ -1577,8 +1701,9 @@
 
                     {/* KHU VỰC VÒNG QUAY */}
                     <div
+                        ref={wheelLayoutRef}
                         className={`layout-edit-target w-full flex flex-col items-center relative mt-2 z-30 transition-all duration-500 ${settings.isLayoutEditMode ? 'active' : ''} ${settings.isEditMode ? (settings.isLayoutEditMode ? 'lg:w-[64%] xl:w-[66%] self-start justify-start' : 'lg:w-[64%] xl:w-[66%] lg:sticky lg:top-6 self-start justify-start') : 'max-w-5xl'}`}
-                        style={{ transform: `translate(${layoutPositions.wheel.x}px, ${layoutPositions.wheel.y}px) scale(${layoutPositions.wheel.scale})`, transformOrigin: 'top center' }}
+                        style={{ transform: getLayoutTransform('wheel'), transformOrigin: 'top center' }}
                     >
                         {settings.isLayoutEditMode && (
                             <>
@@ -1590,13 +1715,25 @@
                                     >
                                         Kéo vòng quay
                                     </button>
-                                    <div className="layout-indicator">{Math.round(layoutPositions.wheel.scale * 100)}%</div>
+                                    <div className="layout-indicator">{formatLayoutScaleLabel('wheel')}</div>
                                 </div>
                                 <button
                                     type="button"
                                     className="resize-handle"
                                     aria-label="Phóng to hoặc thu nhỏ vòng quay"
-                                    onPointerDown={(event) => startLayoutResize('wheel', event)}
+                                    onPointerDown={(event) => startLayoutResize('wheel', 'resize-diagonal', event)}
+                                ></button>
+                                <button
+                                    type="button"
+                                    className="resize-handle resize-handle-x"
+                                    aria-label="Phóng to hoặc thu nhỏ vòng quay theo ngang"
+                                    onPointerDown={(event) => startLayoutResize('wheel', 'resize-x', event)}
+                                ></button>
+                                <button
+                                    type="button"
+                                    className="resize-handle resize-handle-y"
+                                    aria-label="Phóng to hoặc thu nhỏ vòng quay theo dọc"
+                                    onPointerDown={(event) => startLayoutResize('wheel', 'resize-y', event)}
                                 ></button>
                             </>
                         )}
@@ -1673,8 +1810,9 @@
                     {/* BẢNG ĐIỀU KHIỂN */}
                     {settings.isEditMode && (
                         <div
+                            ref={panelLayoutRef}
                             className={`layout-edit-target w-full lg:w-[36%] xl:w-[34%] self-start cyber-panel flex flex-col z-30 relative animate-fade-in overflow-visible ${settings.isLayoutEditMode ? 'active' : ''}`}
-                            style={{ transform: `translate(${layoutPositions.panel.x}px, ${layoutPositions.panel.y}px) scale(${layoutPositions.panel.scale})`, transformOrigin: 'top left' }}
+                            style={{ transform: getLayoutTransform('panel'), transformOrigin: 'top left' }}
                         >
                             {settings.isLayoutEditMode && (
                                 <>
@@ -1686,13 +1824,25 @@
                                         >
                                             Kéo bảng kết quả
                                         </button>
-                                        <div className="layout-indicator">{Math.round(layoutPositions.panel.scale * 100)}%</div>
+                                        <div className="layout-indicator">{formatLayoutScaleLabel('panel')}</div>
                                     </div>
                                     <button
                                         type="button"
                                         className="resize-handle"
                                         aria-label="Phóng to hoặc thu nhỏ bảng kết quả"
-                                        onPointerDown={(event) => startLayoutResize('panel', event)}
+                                        onPointerDown={(event) => startLayoutResize('panel', 'resize-diagonal', event)}
+                                    ></button>
+                                    <button
+                                        type="button"
+                                        className="resize-handle resize-handle-x"
+                                        aria-label="Kéo ngang bảng kết quả"
+                                        onPointerDown={(event) => startLayoutResize('panel', 'resize-x', event)}
+                                    ></button>
+                                    <button
+                                        type="button"
+                                        className="resize-handle resize-handle-y"
+                                        aria-label="Kéo dọc bảng kết quả"
+                                        onPointerDown={(event) => startLayoutResize('panel', 'resize-y', event)}
                                     ></button>
                                 </>
                             )}
@@ -1802,7 +1952,7 @@
                     )}
                     {settings.isLayoutEditMode && (
                         <div className="layout-edit-caption fixed bottom-0 left-1/2 z-[84] w-full max-w-[92vw] -translate-x-1/2 pb-4">
-                            Kéo thanh trên để di chuyển, kéo góc dưới phải để phóng to hoặc thu nhỏ.
+                            Kéo thanh trên để di chuyển, cạnh phải để kéo ngang, cạnh dưới để kéo dọc, góc dưới phải để kéo chéo.
                         </div>
                     )}
 
