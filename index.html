@@ -416,6 +416,7 @@
         }
         .layout-edit-target.active {
             box-shadow: 0 0 0 1px rgba(93, 230, 255, 0.22), 0 0 28px rgba(93, 230, 255, 0.08);
+            transition: box-shadow 0.18s ease, border-color 0.18s ease, background 0.18s ease, opacity 0.18s ease !important;
         }
         .layout-chrome {
             position: absolute;
@@ -841,7 +842,7 @@
             ), [layoutPositions]);
             const getLayoutTransform = (key, positions = layoutPositions) => {
                 const frame = positions[key];
-                return `translate(${frame.x}px, ${frame.y}px) scale(${frame.scaleX}, ${key === 'wheel' ? frame.scaleX : frame.scaleY})`;
+                return `translate3d(${frame.x}px, ${frame.y}px, 0) scale(${frame.scaleX}, ${key === 'wheel' ? frame.scaleX : frame.scaleY})`;
             };
             const applyLayoutPreview = (positions) => {
                 if (wheelLayoutRef.current) {
@@ -1702,7 +1703,7 @@
                     {/* KHU VỰC VÒNG QUAY */}
                     <div
                         ref={wheelLayoutRef}
-                        className={`layout-edit-target w-full flex flex-col items-center relative mt-2 z-30 transition-all duration-500 ${settings.isLayoutEditMode ? 'active' : ''} ${settings.isEditMode ? (settings.isLayoutEditMode ? 'lg:w-[64%] xl:w-[66%] self-start justify-start' : 'lg:w-[64%] xl:w-[66%] lg:sticky lg:top-6 self-start justify-start') : 'max-w-5xl'}`}
+                        className={`layout-edit-target w-full flex flex-col items-center relative mt-2 z-30 ${settings.isLayoutEditMode ? 'active' : 'transition-all duration-500'} ${settings.isEditMode ? (settings.isLayoutEditMode ? 'lg:w-[64%] xl:w-[66%] self-start justify-start' : 'lg:w-[64%] xl:w-[66%] lg:sticky lg:top-6 self-start justify-start') : 'max-w-5xl'}`}
                         style={{ transform: getLayoutTransform('wheel'), transformOrigin: 'top center' }}
                     >
                         {settings.isLayoutEditMode && (
