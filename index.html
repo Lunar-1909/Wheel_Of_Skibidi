@@ -410,6 +410,17 @@
             border: 1px solid rgba(93, 230, 255, 0.18);
             box-shadow: 0 14px 28px rgba(0,0,0,0.28), 0 0 24px rgba(93, 230, 255, 0.08);
         }
+        .entry-card {
+            min-height: 108px;
+            border-radius: 14px !important;
+        }
+        .entry-primary {
+            min-height: 56px;
+            border-radius: 14px !important;
+        }
+        .entry-note {
+            border-radius: 14px !important;
+        }
         .layout-edit-target {
             position: relative;
             will-change: transform;
@@ -600,11 +611,24 @@
         }
         @media (max-width: 768px) {
             .cyber-panel { border-radius: 24px; }
-            .wheel-container { padding: 14px; border-radius: 50%; }
+            .wheel-container {
+                width: min(calc(100vw - 32px), 680px);
+                height: min(calc(100vw - 32px), 680px);
+                max-width: none;
+                aspect-ratio: auto;
+                padding: 14px;
+                border-radius: 50%;
+            }
             .wheel-container::after { inset: 18px; }
             .center-dot { width: 64px; height: 64px; }
             .center-dot::before { inset: 14px; }
             .pointer { right: 0; }
+            .entry-card {
+                min-height: 116px;
+            }
+            .entry-primary {
+                min-height: 58px;
+            }
         }
     </style>
 </head>
@@ -1940,9 +1964,9 @@
                                             const isExpanded = settings.isAdvancedMode && expandedId === entry.id;
                                             const percentage = totalWeight > 0 ? ((getEntryWeight(entry) / totalWeight) * 100).toFixed(1) : 0;
                                             return (
-                                                <div key={entry.id} className="glass-card rounded-[22px] p-3.5 flex flex-col gap-3 transition-all">
+                                                <div key={entry.id} className="entry-card glass-card p-4 flex flex-col gap-3 transition-all">
                                                     <div className="flex w-full flex-col gap-3 xl:flex-row xl:items-center">
-                                                        <div className="glass-input flex min-w-0 flex-1 gap-3 items-center px-3 py-2.5">
+                                                        <div className="entry-primary glass-input flex min-w-0 flex-1 gap-3 items-center px-3 py-3">
                                                             {settings.isAdvancedMode && (
                                                                 <input type="color" value={entry.color} onChange={(e) => updateEntry(entry.id, 'color', e.target.value)} className="h-10 w-10 shrink-0 cursor-pointer border-0 p-0 bg-transparent" />
                                                             )}
@@ -1968,7 +1992,7 @@
                                                     </div>
                                                     {isExpanded && (
                                                         <div className="mt-1 flex flex-col gap-3 border-t border-white/10 pt-3 animate-fade-in">
-                                                            <input type="text" value={entry.note} onChange={(e) => updateEntry(entry.id, 'note', e.target.value)} placeholder="Ghi chú (không bắt buộc)" className="glass-input w-full px-4 py-3 text-sm text-slate-100 outline-none transition" />
+                                                            <input type="text" value={entry.note} onChange={(e) => updateEntry(entry.id, 'note', e.target.value)} placeholder="Ghi chú (không bắt buộc)" className="entry-note glass-input w-full px-4 py-3 text-sm text-slate-100 outline-none transition" />
                                                             <div className="flex flex-wrap items-center justify-between gap-2">
                                                                 <span className="section-label">Đánh dấu để mục này không thể trúng</span>
                                                                 <input type="checkbox" checked={entry.isFake} onChange={(e) => updateEntry(entry.id, 'isFake', e.target.checked)} className="secret-checkbox inline" />
