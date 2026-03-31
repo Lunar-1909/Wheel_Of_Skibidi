@@ -770,6 +770,39 @@
                 incomingSettings.layoutPositions ?? currentSettings.layoutPositions ?? defaultLayoutPositions
             )
         });
+        const persistedImageFields = ['bgImageData', 'wheelImageData'];
+        const serializeSettingsAssets = (sourceSettings = {}, assets = {}) => {
+            const serializedSettings = { ...sourceSettings };
+
+            persistedImageFields.forEach((field) => {
+                const value = sourceSettings[field];
+                if (typeof value === 'string' && value.trim() !== '') {
+                    let assetId = Object.keys(assets).find((key) => assets[key].field === field && assets[key].data === value);
+                    if (!assetId) {
+                        assetId = `${field}_${Object.keys(assets).length + 1}`;
+                        assets[assetId] = { field, data: value };
+                    }
+                    serializedSettings[`${field}AssetId`] = assetId;
+                    delete serializedSettings[field];
+                } else {
+                    serializedSettings[field] = '';
+                    delete serializedSettings[`${field}AssetId`];
+                }
+            });
+
+            return serializedSettings;
+        };
+        const hydrateSettingsAssets = (sourceSettings = {}, assets = {}) => {
+            const hydratedSettings = { ...sourceSettings };
+
+            persistedImageFields.forEach((field) => {
+                const assetId = sourceSettings[`${field}AssetId`];
+                hydratedSettings[field] = assetId && assets[assetId]?.data ? assets[assetId].data : (sourceSettings[field] || '');
+                delete hydratedSettings[`${field}AssetId`];
+            });
+
+            return hydratedSettings;
+        };
         const defaultSettings = {
             enableConfetti: true,
             isEditMode: true, 
@@ -795,6 +828,7 @@
             const [user, setUser] = useState(null);
             const [isDataLoaded, setIsDataLoaded] = useState(false);
             const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+            const [isCompactScreen, setIsCompactScreen] = useState(() => window.innerWidth < 1024);
 
             // -- App Data --
             const [wheelTitle, setWheelTitle] = useState("Vòng quay may mắn");
@@ -832,24 +866,28 @@
 
             const isCloudMode = Boolean(auth && db);
             const layoutPositions = useMemo(() => cloneLayoutPositions(settings.layoutPositions), [settings.layoutPositions]);
+            const isLayoutFrameDefault = (key, positions = layoutPositions) => {
+                const frame = positions[key];
+                const baseFrame = defaultLayoutPositions[key];
+                return frame.x === baseFrame.x && frame.y === baseFrame.y && frame.scaleX === baseFrame.scaleX && frame.scaleY === baseFrame.scaleY;
+            };
             const isDefaultLayout = useMemo(() => (
                 ['wheel', 'panel'].every((key) => (
-                    layoutPositions[key].x === defaultLayoutPositions[key].x &&
-                    layoutPositions[key].y === defaultLayoutPositions[key].y &&
-                    layoutPositions[key].scaleX === defaultLayoutPositions[key].scaleX &&
-                    layoutPositions[key].scaleY === defaultLayoutPositions[key].scaleY
+                    isLayoutFrameDefault(key)
                 ))
             ), [layoutPositions]);
+            const wheelUsesLayoutTransform = settings.isLayoutEditMode || !isLayoutFrameDefault('wheel');
+            const panelUsesLayoutTransform = settings.isLayoutEditMode || (!isCompactScreen && !isLayoutFrameDefault('panel'));
             const getLayoutTransform = (key, positions = layoutPositions) => {
                 const frame = positions[key];
                 return `translate3d(${frame.x}px, ${frame.y}px, 0) scale(${frame.scaleX}, ${key === 'wheel' ? frame.scaleX : frame.scaleY})`;
             };
             const applyLayoutPreview = (positions) => {
                 if (wheelLayoutRef.current) {
-                    wheelLayoutRef.current.style.transform = getLayoutTransform('wheel', positions);
+                    wheelLayoutRef.current.style.transform = (settings.isLayoutEditMode || !isLayoutFrameDefault('wheel', positions)) ? getLayoutTransform('wheel', positions) : 'none';
                 }
                 if (panelLayoutRef.current) {
-                    panelLayoutRef.current.style.transform = getLayoutTransform('panel', positions);
+                    panelLayoutRef.current.style.transform = (settings.isLayoutEditMode || (!isCompactScreen && !isLayoutFrameDefault('panel', positions))) ? getLayoutTransform('panel', positions) : 'none';
                 }
             };
             const formatLayoutScaleLabel = (key) => {
@@ -868,19 +906,42 @@
 
             const applyPersistedData = (data) => {
                 if (!data) return;
+                const persistedAssets = data.assets || {};
                 if (data.currentState) {
                     if (data.currentState.entries) setEntries(data.currentState.entries);
                     if (data.currentState.results) setResults(data.currentState.results);
                     if (data.currentState.wheelTitle) setWheelTitle(data.currentState.wheelTitle);
-                    if (data.currentState.settings) setSettings(prev => mergeSettingsState(prev, data.currentState.settings));
+                    if (data.currentState.settings) {
+                        setSettings(prev => mergeSettingsState(prev, hydrateSettingsAssets(data.currentState.settings, persistedAssets)));
+                    }
                 }
-                if (data.saves) setSaves(data.saves);
+                if (data.saves) {
+                    setSaves(data.saves.map((save) => ({
+                        ...save,
+                        data: {
+                            ...save.data,
+                            settings: hydrateSettingsAssets(save.data?.settings || {}, persistedAssets)
+                        }
+                    })));
+                }
             };
 
-            const buildPersistedData = (overrideSaves = saves) => ({
-                currentState: { entries, results, wheelTitle, settings },
-                saves: overrideSaves
-            });
+            const buildPersistedData = (overrideSaves = saves) => {
+                const persistedAssets = {};
+                const serializedSaves = overrideSaves.map((save) => ({
+                    ...save,
+                    data: {
+                        ...save.data,
+                        settings: serializeSettingsAssets(save.data?.settings || {}, persistedAssets)
+                    }
+                }));
+
+                return {
+                    currentState: { entries, results, wheelTitle, settings: serializeSettingsAssets(settings, persistedAssets) },
+                    saves: serializedSaves,
+                    assets: persistedAssets
+                };
+            };
 
             // Xác định phông chữ hiện tại để dùng chung cho CSS và Canvas
             const currentFontFamily = useMemo(() => {
@@ -903,8 +964,15 @@
             }, [settings.isAdvancedMode]);
 
             useEffect(() => {
+                const handleResize = () => setIsCompactScreen(window.innerWidth < 1024);
+                handleResize();
+                window.addEventListener('resize', handleResize);
+                return () => window.removeEventListener('resize', handleResize);
+            }, []);
+
+            useEffect(() => {
                 applyLayoutPreview(layoutPositions);
-            }, [layoutPositions]);
+            }, [layoutPositions, settings.isLayoutEditMode, isCompactScreen]);
 
             useEffect(() => {
                 if (settings.isLayoutEditMode) return;
@@ -1003,7 +1071,7 @@
                     window.removeEventListener('pointerup', handleLayoutDragEnd);
                     window.removeEventListener('pointercancel', handleLayoutDragEnd);
                 };
-            }, []);
+            }, [isCompactScreen, settings.isLayoutEditMode]);
 
             // 1. Khởi tạo Auth
             useEffect(() => {
@@ -1612,7 +1680,7 @@
             }
 
             return (
-                <div className={`min-h-screen mx-auto w-full max-w-[1680px] px-4 pb-10 pt-24 lg:px-6 lg:pb-12 lg:pt-8 flex flex-col gap-4 xl:gap-5 relative overflow-x-hidden ${settings.isLayoutEditMode ? 'pb-28 lg:pb-32' : ''} ${settings.isEditMode ? 'lg:flex-row lg:items-start' : 'items-center justify-center'}`}>
+                <div className={`min-h-screen mx-auto w-full max-w-[1680px] px-4 pb-10 pt-24 lg:px-6 lg:pb-12 lg:pt-8 flex flex-col gap-4 xl:gap-5 relative ${settings.isLayoutEditMode ? 'overflow-visible pb-28 lg:pb-32' : 'overflow-x-hidden'} ${settings.isEditMode ? 'lg:flex-row lg:items-start' : 'items-center justify-center'}`}>
                     
                     {/* Thêm style để load custom Google Font động */}
                     {settings.customFont && settings.customFont.trim() !== '' && (
@@ -1704,7 +1772,7 @@
                     <div
                         ref={wheelLayoutRef}
                         className={`layout-edit-target w-full flex flex-col items-center relative mt-2 z-30 ${settings.isLayoutEditMode ? 'active' : 'transition-all duration-500'} ${settings.isEditMode ? (settings.isLayoutEditMode ? 'lg:w-[64%] xl:w-[66%] self-start justify-start' : 'lg:w-[64%] xl:w-[66%] lg:sticky lg:top-6 self-start justify-start') : 'max-w-5xl'}`}
-                        style={{ transform: getLayoutTransform('wheel'), transformOrigin: 'top center' }}
+                        style={wheelUsesLayoutTransform ? { transform: getLayoutTransform('wheel'), transformOrigin: 'top center' } : undefined}
                     >
                         {settings.isLayoutEditMode && (
                             <>
@@ -1813,7 +1881,7 @@
                         <div
                             ref={panelLayoutRef}
                             className={`layout-edit-target w-full lg:w-[36%] xl:w-[34%] self-start cyber-panel flex flex-col z-30 relative animate-fade-in overflow-visible ${settings.isLayoutEditMode ? 'active' : ''}`}
-                            style={{ transform: getLayoutTransform('panel'), transformOrigin: 'top left' }}
+                            style={panelUsesLayoutTransform ? { transform: getLayoutTransform('panel'), transformOrigin: 'top left' } : undefined}
                         >
                             {settings.isLayoutEditMode && (
                                 <>
@@ -1855,15 +1923,12 @@
                             <div className="p-4 sm:p-5">
                                 {activeTab === 'entries' && (
                                     <div className="space-y-3">
-                                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                                             <button onClick={shuffleEntries} disabled={entries.length < 2} className={`glass-button py-3.5 px-4 font-semibold transition ${entries.length < 2 ? 'text-slate-500 cursor-not-allowed' : 'text-white'}`}>
                                                 Xáo trộn
                                             </button>
                                             <button onClick={sortEntriesAlphabetically} disabled={entries.length < 2} className={`glass-button py-3.5 px-4 font-semibold transition ${entries.length < 2 ? 'text-slate-500 cursor-not-allowed' : 'text-white'}`}>
                                                 Sắp xếp A-Z
-                                            </button>
-                                            <button onClick={addEntry} className="glass-button py-3.5 px-4 font-semibold text-white transition">
-                                                + Thêm kết quả
                                             </button>
                                         </div>
                                         <div className="glass-card rounded-[24px] px-4 py-3 text-sm text-slate-300">
@@ -1914,6 +1979,9 @@
                                             )
                                         })}
                                         {entries.length === 0 && <div className="glass-card rounded-[26px] py-10 text-center text-slate-400">Chưa có kết quả nào</div>}
+                                        <button onClick={addEntry} className="glass-button w-full py-3.5 px-4 font-semibold text-white transition">
+                                            + Thêm kết quả
+                                        </button>
                                     </div>
                                 )}
 
